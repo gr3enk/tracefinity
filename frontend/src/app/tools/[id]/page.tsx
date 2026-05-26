@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { Loader2, Check, Download, Folder } from 'lucide-react'
-import { getTool, updateTool, getToolSvgUrl, getImageUrl, listProjects } from '@/lib/api'
+import { getTool, updateTool, autoRotateTool, getToolSvgUrl, getImageUrl, listProjects } from '@/lib/api'
+import { rotateGeometry } from '@/lib/geometry'
 import { useDebouncedSave } from '@/hooks/useDebouncedSave'
 import { useProjectSource } from '@/hooks/useProjectSource'
 import { projectNameMap } from '@/lib/projectSelectors'
@@ -23,6 +24,7 @@ export default function ToolPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [name, setName] = useState('')
+  const [autoRotating, setAutoRotating] = useState(false)
   const [showSourceImage, setShowSourceImage] = useState(false)
   const [sourceImageOpacity, setSourceImageOpacity] = useState(0.45)
 
@@ -97,6 +99,29 @@ export default function ToolPage() {
   const handleInteriorRingsChange = useCallback((interior_rings: Point[][]) => {
     setTool(prev => prev ? { ...prev, interior_rings } : null)
   }, [])
+
+  const handleAutoRotate = useCallback(async (): Promise<number | null> => {
+    if (!tool || autoRotating) return null
+    setAutoRotating(true)
+    try {
+      const { angle } = await autoRotateTool(toolId)
+      if (Math.abs(angle) < 0.01) return null
+      const rotated = rotateGeometry(tool.points, tool.finger_holes, tool.interior_rings, angle)
+      setTool(prev => prev ? {
+        ...prev,
+        points: rotated.points,
+        finger_holes: rotated.fingerHoles,
+        interior_rings: rotated.interiorRings,
+      } : prev)
+      return angle
+    } catch (err) {
+      console.error('auto-rotate failed:', err)
+      setError(err instanceof Error ? err.message : 'Auto-rotate failed')
+      return null
+    } finally {
+      setAutoRotating(false)
+    }
+  }, [tool, toolId, autoRotating])
 
   const projectNameById = useMemo(() => projectNameMap(projects), [projects])
   const toolProjects = useMemo(() => {
@@ -199,6 +224,8 @@ export default function ToolPage() {
         onSmoothedChange={handleSmoothedChange}
         onSmoothLevelChange={handleSmoothLevelChange}
         onInteriorRingsChange={handleInteriorRingsChange}
+        onAutoRotate={handleAutoRotate}
+        autoRotating={autoRotating}
       />
     </div>
   )

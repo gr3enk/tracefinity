@@ -73,6 +73,7 @@ from app.services.project_store import ProjectStore
 from app.services.bin_service import sync_placed_tools
 from app.services.image_service import generate_tool_thumbnail
 from app.services.tracer_registry import TRACER_LABELS, validate_tracer_ids
+from app.services.geometry import optimal_rotation_angle as _optimal_rotation_angle
 from app.services.project_service import (
     add_bin_to_project,
     add_project_to_tools,
@@ -388,8 +389,10 @@ def _build_bin_from_tools(
 
         bin_w = bc.grid_x * GF_GRID
         bin_h = bc.grid_y * GF_GRID
-        offset_x = bin_w / 2
-        offset_y = bin_h / 2
+        bbox_cx = (min(all_xs) + max(all_xs)) / 2
+        bbox_cy = (min(all_ys) + max(all_ys)) / 2
+        offset_x = bin_w / 2 - bbox_cx
+        offset_y = bin_h / 2 - bbox_cy
         for pt in placed:
             pt.points = _translate_points(pt.points, offset_x, offset_y)
             pt.finger_holes = _translate_finger_holes(pt.finger_holes, offset_x, offset_y)
@@ -975,6 +978,17 @@ async def update_tool(request: Request, tool_id: str, req: ToolUpdateRequest, us
         tool.needs_cleanup = req.needs_cleanup
     user_tools.set(tool_id, tool)
     return StatusResponse(status="ok")
+
+
+@router.post("/tools/{tool_id}/auto-rotate")
+async def auto_rotate_tool(request: Request, tool_id: str, user_id: str = Depends(get_user_id)):
+    _, user_tools, _ = get_stores(user_id)
+    tool = user_tools.get(tool_id)
+    if not tool or not tool.points:
+        raise HTTPException(status_code=404, detail="tool not found")
+    pts = [(p.x, p.y) for p in tool.points]
+    angle = _optimal_rotation_angle(pts)
+    return {"angle": angle}
 
 
 @router.delete("/tools/{tool_id}", response_model=StatusResponse)
