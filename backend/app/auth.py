@@ -4,8 +4,8 @@ import re
 
 from fastapi import HTTPException, Request
 
-# only allow uuid-formatted user ids to prevent path traversal
-_USER_ID_RE = re.compile(r"^[a-f0-9-]{36}$")
+# allow cuid (25 alphanumeric) or uuid (36 hex+hyphens); block path traversal
+_USER_ID_RE = re.compile(r"^[a-z0-9]{25}$|^[a-f0-9-]{36}$")
 
 
 async def get_user_id(request: Request) -> str:
