@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 from typing import Literal, Optional
 
 from app.constants import PaperSize
@@ -90,6 +90,16 @@ class BinParams(BaseModel):
     insert_height: float = 1.0
     insert_clearance: float = 0.2  # mm shaved off the insert so it fits the pocket
     cutout_chamfer: float = 0.0
+    partial_bins: bool = False
+    partial_bins_values: list[bool] = []
+    partial_bins_connect: bool = False
+
+    @model_validator(mode="after")
+    def normalize_partial_bins_values(self) -> "BinParams":
+        expected = self.grid_x * self.grid_y
+        if len(self.partial_bins_values) != expected:
+            self.partial_bins_values = [True] * expected
+        return self
 
     @field_validator("grid_x", "grid_y")
     @classmethod
