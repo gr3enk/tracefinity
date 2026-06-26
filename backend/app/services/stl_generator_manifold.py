@@ -199,6 +199,11 @@ def _partial_bins_connect_bases(config: GenerateRequest) -> bool:
     return getattr(config, "partial_bins_connect", False) and _uses_partial_shell(config)
 
 
+def _cell_retains_base(config: GenerateRequest, ix: int, iy: int) -> bool:
+    """Whether a grid cell still has base geometry (enabled, or connect-base disabled)."""
+    return _cell_enabled(config, ix, iy) or _partial_bins_connect_bases(config)
+
+
 def _exports_separated_partial_parts(config: GenerateRequest) -> bool:
     return _uses_partial_shell(config) and not _partial_bins_connect_bases(config)
 
@@ -553,7 +558,7 @@ def _make_magnet_holes(config: GenerateRequest):
             (config.grid_x - 1, config.grid_y - 1, 13.0, 13.0),
             (0, config.grid_y - 1, -13.0, 13.0),
         ]:
-            if not _cell_enabled(config, ix, iy):
+            if not _cell_retains_base(config, ix, iy):
                 continue
             cx, cy = _cell_center(ix, iy, config.grid_x, config.grid_y)
             outer_corners.add((round(cx + dx, 4), round(cy + dy, 4)))
@@ -561,7 +566,7 @@ def _make_magnet_holes(config: GenerateRequest):
     holes = []
     for iy in range(config.grid_y):
         for ix in range(config.grid_x):
-            if not _cell_enabled(config, ix, iy):
+            if not _cell_retains_base(config, ix, iy):
                 continue
             cx, cy = _cell_center(ix, iy, config.grid_x, config.grid_y)
             for dx, dy in [(-13.0, -13.0), (13.0, -13.0), (13.0, 13.0), (-13.0, 13.0)]:
