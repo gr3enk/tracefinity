@@ -59,7 +59,7 @@ Reference for AI agents. Check here before suggesting new features or claiming s
 - Half-grid base (21mm cells for finer baseplate positioning)
 - Insert mode (contrast insert with configurable height)
 - Bed size for auto-splitting large bins
-- Partial bins (disabled specific parts of the bin to save filament)
+- Partial bins (disable individual grid cells to reduce print volume)
 - Auto-size grid to fit placed tools
 - Save/reset default bin configuration (global and per-project)
 

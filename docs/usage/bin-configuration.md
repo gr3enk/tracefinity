@@ -30,11 +30,11 @@ Gridfinity is a modular storage system where bins snap into a baseplate grid. Ea
 
 **Contrast insert** -- generates a separate STL to print in a different colour. The pocket is deepened automatically to accommodate the insert thickness.
 
-**Partial Bins** -- allows you to disable individual parts of the Gridfinity box to save filament. 
+**Partial Bins** -- disables individual grid cells, removing them from the shell.
 
-**Connect Base** -- When enabled, the disabled parts of the Gridfinity box (partial bins) stay connected on the base plate.
+**Connect Base** -- disabled cells keep the base plate connected instead of being fully removed.
 
-**Retain outer wall** -- This is an additional feature for “Connect base” on partial bins. When enabled, the disabled parts of the bin are not only connected by the base plate but the outer bin wall also remains around the entire perimeter of the bin model.
+**Retain outer wall** -- keeps the outer bin wall around the full perimeter when connect base is on.
 
 ## Auto grid sizing
 
@@ -51,7 +51,7 @@ Use "Save as defaults" to capture the current bin config. Use "Reset defaults" t
 
 ## Partial Bins
 
-The partia bins option allows you to disable individual parts of the Gridfinity box to save filament. By using a matrix that matches the grid width * grid depth, specific parts of the box can be enabled or disabled.
+The partial bins option allows you to disable individual parts of the Gridfinity box to save filament. By using a matrix that matches the grid width * grid depth, specific parts of the box can be enabled or disabled.
 
 ## Bed splitting
 

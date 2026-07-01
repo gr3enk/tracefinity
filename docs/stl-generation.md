@@ -50,7 +50,7 @@ Disabled cells are removed with full-height 42×42mm cutters (`_make_disabled_ce
 Disabled cells keep base geometry but lose walls and lip above `BASE_HEIGHT`:
 
 1. **Wall cutters** (`_make_connect_mode_cell_cutters`) subtract everything from `BASE_HEIGHT` up to the bin top in each disabled cell.
-2. **Stability plates** (`_make_connect_mode_stability_plates`) add a ~5.8mm floor bridge (`PARTIAL_BIN_CONNECT_PLATE_MM = 6.0 - 0.2`) at `z = BASE_HEIGHT` across each disabled region. Plates extend half a grid unit into neighbouring enabled cells for adhesion.
+2. **Stability plates** (`_make_connect_mode_stability_plates`) add a 5.8mm floor bridge (`PARTIAL_BIN_CONNECT_PLATE_MM = 6.0 - 0.2`) at `z = BASE_HEIGHT` across each disabled region. Plates extend half a grid unit into neighbouring enabled cells for adhesion.
 
 **Retain outer wall** (`partial_bins_retain_wall`, only valid with connect mode): wall cutters are inset from the bin perimeter by `LIP_D0 + LIP_D2` (~2.6mm) so the outer shell strip survives through disabled edge cells.
 

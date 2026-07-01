@@ -81,7 +81,7 @@ The sidebar controls all bin parameters:
 | Contrast Insert | Generates a separate insert STL for two-colour printing. |
 | Insert Height | Thickness of the insert piece. |
 | Bed Size | Print bed dimension. Bins exceeding this are split automatically. |
-| Partial Bins | Disable specific parts of the bin to save filament. |
+| Partial Bins | Disable individual grid cells in the bin. |
 
 **Save as default** stores the current settings for all new bins. **Reset** restores factory defaults.
 
