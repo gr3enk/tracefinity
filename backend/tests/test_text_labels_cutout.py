@@ -244,3 +244,34 @@ def test_recess_on_connect_plate_outside_cutout_in_disabled_cell():
     assert connect_part is not None and not connect_part.is_empty()
     assert cutout_part is not None and not cutout_part.is_empty()
     assert connect_part.volume() > cutout_part.volume() * 0.3
+
+
+def test_shallow_cutout_in_disabled_connect_cell_uses_plate_not_pocket_floor():
+    """Shallow pockets above the connect plate must not steal text from the plate surface."""
+    config = _connect_config(
+        cutout_depth=5,
+        text_labels=[TextLabel(id="span", text="HELLO", x=63, y=21, emboss=False)],
+    )
+    cutout = _disabled_cell_cutout()
+    wall_top_z, offset_x, offset_y, max_depth = _label_params()
+    tl = config.text_labels[0]
+    cs = sg._text_to_cross_section(tl.text, tl.font_size)
+    lx = tl.x + offset_x
+    ly = -(tl.y + offset_y)
+    plate_top = sg._connect_base_emboss_z()
+
+    connect_clip = sg._make_connect_base_emboss_clip_volume(
+        config, tl.depth, offset_x, offset_y, wall_top_z, max_depth, [cutout]
+    )
+    connect_solid = sg._recessed_text_solid(cs, tl.depth, tl.rotation, lx, ly, plate_top)
+    connect_part = sg._intersect_emboss(connect_solid, connect_clip)
+
+    cutout_clip = sg._make_cutout_emboss_clip_volume(
+        cutout, config, wall_top_z, max_depth, tl.depth, offset_x, offset_y
+    )
+    cutout_floor = wall_top_z - 5
+    cutout_solid = sg._recessed_text_solid(cs, tl.depth, tl.rotation, lx, ly, cutout_floor)
+    cutout_part = sg._intersect_emboss(cutout_solid, cutout_clip)
+
+    assert connect_part is not None and not connect_part.is_empty()
+    assert cutout_part is None or cutout_part.is_empty()
