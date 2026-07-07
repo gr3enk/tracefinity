@@ -67,13 +67,9 @@ Bed splitting uses the **full** `grid_x` / `grid_y` footprint when connect mode 
 
 ### Text labels
 
-Embossed labels are intersected with valid floor regions in three layers when needed:
-
-1. **Bin floor** (`wall_top_z`) - enabled partial-bin cells (or full interior) minus tool cutout openings.
-2. **Cutout floors** - each tool pocket at its own `cutout_floor_z`.
-3. **Connect-base bridges** (`GF_BASE_HEIGHT`) - disabled partial-bin regions when connect mode is on.
-
-Text spanning a pocket edge or an enabled/disabled cell boundary is split across the matching surfaces. With connect mode off, disabled cells are omitted entirely. Recessed labels still pick a single floor from the label centre.
+Labels are generated on a single floor chosen from the label centre (`wall_top_z` or
+`cutout_floor_z`, depending on whether the centre is inside a tool polygon).
+When partial bins disable a cell, labels in that cell are skipped entirely.
 
 ## Base geometry (per cell, reverse-engineered from gridfinity-build123d)
 

@@ -797,257 +797,6 @@ def _interior_clip_rect(config):
     return _SPoly([(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)])
 
 
-def _scaled_polygon_to_cross_section(
-    poly: ScaledPolygon,
-    offset_x: float,
-    offset_y: float,
-    interior_rect,
-):
-    """Tool polygon as a manifold CrossSection in bin coordinates."""
-    import manifold3d as mf
-
-    shifted = [
-        (p[0] + offset_x, -(p[1] + offset_y))
-        for p in poly.points_mm
-    ]
-    if len(shifted) < 3:
-        return None
-
-    shifted_holes = []
-    for hole in poly.interior_rings_mm or []:
-        shifted_hole = [
-            (p[0] + offset_x, -(p[1] + offset_y))
-            for p in hole
-        ]
-        if len(shifted_hole) >= 3:
-            shifted_holes.append(shifted_hole)
-
-    shifted, shifted_holes = _clip_to_interior(shifted, shifted_holes, interior_rect)
-    if len(shifted) < 3:
-        return None
-
-    rings = _shapely_to_cross_sections(shifted, shifted_holes)
-    if not rings:
-        return None
-
-    has_holes = len(rings) > 1
-    fill = mf.FillRule.EvenOdd if has_holes else mf.FillRule.Positive
-    cs = mf.CrossSection(rings, fill)
-    if cs.area() <= 0:
-        cs = mf.CrossSection([r[::-1] for r in rings], fill)
-    return cs if cs.area() > 0 else None
-
-
-def _extrude_clip_slab(cs, z0: float, height: float):
-    import manifold3d as mf
-
-    return mf.Manifold.extrude(cs, height + 0.02).translate((0.0, 0.0, z0 - 0.01))
-
-
-def _make_partial_cell_clip_volume(
-    config: GenerateRequest,
-    z0: float,
-    height: float,
-    offset_x: float,
-    offset_y: float,
-    cell_ok,
-):
-    """Union of grid cells extruded for clipping text labels."""
-    if not _uses_partial_shell(config):
-        return None
-
-    import manifold3d as mf
-
-    grid_x, grid_y = _grid_cell_counts(config)
-    parts = []
-    for iy in range(grid_y):
-        for ix in range(grid_x):
-            if not cell_ok(config, ix, iy):
-                continue
-            ly0 = (grid_y - 1 - iy) * GF_GRID
-            lx0 = ix * GF_GRID
-            cx = lx0 + GF_GRID / 2.0 + offset_x
-            cy = -(ly0 + GF_GRID / 2.0 + offset_y)
-            cs = _cs(_sharp_rect_pts(GF_GRID, GF_GRID))
-            parts.append(
-                mf.Manifold.extrude(cs, height + 0.02).translate((cx, cy, z0 - 0.01))
-            )
-
-    if not parts:
-        return None
-    return mf.Manifold.batch_boolean(parts, mf.OpType.Add)
-
-
-def _make_enabled_cell_clip_volume(
-    config: GenerateRequest,
-    z0: float,
-    height: float,
-    offset_x: float,
-    offset_y: float,
-):
-    """Union of enabled grid cells extruded for clipping text labels."""
-    return _make_partial_cell_clip_volume(
-        config, z0, height, offset_x, offset_y, _cell_enabled
-    )
-
-
-def _make_cell_retains_base_clip_volume(
-    config: GenerateRequest,
-    z0: float,
-    height: float,
-    offset_x: float,
-    offset_y: float,
-):
-    """Union of cells that retain base geometry (enabled + connect-base disabled)."""
-    return _make_partial_cell_clip_volume(
-        config, z0, height, offset_x, offset_y, _cell_retains_base
-    )
-
-
-def _make_bin_floor_emboss_clip(
-    config: GenerateRequest,
-    z0: float,
-    height: float,
-    offset_x: float,
-    offset_y: float,
-):
-    """Horizontal slab for text on the bin floor face."""
-    if _uses_partial_shell(config):
-        return _make_enabled_cell_clip_volume(config, z0, height, offset_x, offset_y)
-
-    import manifold3d as mf
-
-    interior = _interior_clip_rect(config)
-    pts = np.array(list(interior.exterior.coords[:-1]), dtype=np.float64)
-    return _extrude_clip_slab(mf.CrossSection([pts]), z0, height)
-
-
-def _make_surface_emboss_clip_volume(
-    config: GenerateRequest,
-    wall_top_z: float,
-    depth: float,
-    offset_x: float,
-    offset_y: float,
-    polygons: list[ScaledPolygon] | None,
-    max_depth: float,
-):
-    """Valid floor-face regions for text (excludes tool cutout openings)."""
-    import manifold3d as mf
-
-    base = _make_bin_floor_emboss_clip(config, wall_top_z, depth, offset_x, offset_y)
-    if base is None or not polygons:
-        return base
-
-    interior_rect = _interior_clip_rect(config)
-    footprints = []
-    for poly in polygons:
-        cs = _scaled_polygon_to_cross_section(poly, offset_x, offset_y, interior_rect)
-        if cs is not None:
-            footprints.append(_extrude_clip_slab(cs, wall_top_z, depth))
-
-    if not footprints:
-        return base
-
-    footprint_union = mf.Manifold.batch_boolean(footprints, mf.OpType.Add)
-    return base - footprint_union
-
-
-def _connect_base_emboss_z() -> float:
-    return GF_BASE_HEIGHT + PARTIAL_BIN_CONNECT_PLATE_MM
-
-
-def _cutout_reaches_connect_plate(
-    wall_top_z: float, pocket_depth: float
-) -> bool:
-    """True when a pocket floor is at or below the connect-base plate top."""
-    return (wall_top_z - pocket_depth) <= _connect_base_emboss_z()
-
-
-def _make_cutout_emboss_clip_volume(
-    poly: ScaledPolygon,
-    config: GenerateRequest,
-    wall_top_z: float,
-    max_depth: float,
-    label_depth: float,
-    offset_x: float,
-    offset_y: float,
-):
-    """Vertical slab inside a tool pocket for text on the cutout floor."""
-    import manifold3d as mf
-
-    cs = _scaled_polygon_to_cross_section(
-        poly, offset_x, offset_y, _interior_clip_rect(config)
-    )
-    if cs is None:
-        return None
-
-    pocket_depth = _resolve_pocket_depth(poly.depth_override, config, max_depth)
-    cutout_floor = wall_top_z - pocket_depth
-    clip = _extrude_clip_slab(cs, cutout_floor, label_depth)
-
-    plate_top = _connect_base_emboss_z()
-
-    def _cutout_text_cell(c, ix, iy) -> bool:
-        if _cell_enabled(c, ix, iy):
-            return True
-        if not _partial_bins_connect_bases(c):
-            return False
-        return cutout_floor <= plate_top
-
-    valid_cells = _make_partial_cell_clip_volume(
-        config, cutout_floor, label_depth, offset_x, offset_y, _cutout_text_cell
-    )
-    if valid_cells is not None:
-        clip = mf.Manifold.batch_boolean([clip, valid_cells], mf.OpType.Intersect)
-    return clip
-
-
-def _make_connect_base_emboss_clip_volume(
-    config: GenerateRequest,
-    label_depth: float,
-    offset_x: float,
-    offset_y: float,
-    wall_top_z: float,
-    max_depth: float,
-    polygons: list[ScaledPolygon] | None,
-):
-    """Clip volume for text on connect-base bridge plates in disabled cells."""
-    if not _partial_bins_connect_bases(config):
-        return None
-
-    import manifold3d as mf
-
-    plate_top = _connect_base_emboss_z()
-
-    def _disabled_cell(c, ix, iy) -> bool:
-        return not _cell_enabled(c, ix, iy)
-
-    base = _make_partial_cell_clip_volume(
-        config, plate_top, label_depth, offset_x, offset_y, _disabled_cell
-    )
-    if base is None:
-        return None
-
-    if not polygons:
-        return base
-
-    interior_rect = _interior_clip_rect(config)
-    footprints = []
-    for poly in polygons:
-        pocket_depth = _resolve_pocket_depth(poly.depth_override, config, max_depth)
-        if not _cutout_reaches_connect_plate(wall_top_z, pocket_depth):
-            continue
-        cs = _scaled_polygon_to_cross_section(poly, offset_x, offset_y, interior_rect)
-        if cs is not None:
-            footprints.append(_extrude_clip_slab(cs, plate_top, label_depth))
-
-    if not footprints:
-        return base
-
-    footprint_union = mf.Manifold.batch_boolean(footprints, mf.OpType.Add)
-    return base - footprint_union
-
-
 def _make_polygon_cutouts(
     polygons: list[ScaledPolygon],
     config: GenerateRequest,
@@ -1428,147 +1177,18 @@ def _text_to_cross_section(text: str, font_size_mm: float):
     return cs if cs.area() > 0 else None
 
 
-def _embossed_text_solid(cs, depth: float, rotation: float, lx: float, ly: float, floor_z: float):
-    import manifold3d as mf
-
-    return (
-        mf.Manifold.extrude(cs, depth)
-        .rotate((0.0, 0.0, -rotation))
-        .translate((lx, ly, floor_z))
-    )
-
-
-def _recessed_text_solid(cs, depth: float, rotation: float, lx: float, ly: float, floor_z: float):
-    import manifold3d as mf
-
-    return (
-        mf.Manifold.extrude(cs, depth + 0.01)
-        .rotate((0.0, 0.0, -rotation))
-        .translate((lx, ly, floor_z - depth - 0.01))
-    )
-
-
-def _intersect_emboss(solid, clip):
-    if clip is None:
-        return solid
-
-    import manifold3d as mf
-
-    result = mf.Manifold.batch_boolean([solid, clip], mf.OpType.Intersect)
-    return None if result.is_empty() else result
-
-
-def _text_label_floor_layers(
-    config: GenerateRequest,
-    wall_top_z: float,
-    depth: float,
-    offset_x: float,
-    offset_y: float,
-    polygons: list[ScaledPolygon] | None,
-    max_depth: float,
-):
-    """Yield (floor_z, clip) for each valid text floor surface."""
-    surface_clip = _make_surface_emboss_clip_volume(
-        config, wall_top_z, depth, offset_x, offset_y, polygons, max_depth
-    )
-    if surface_clip is not None:
-        yield wall_top_z, surface_clip
-
-    for poly in polygons or []:
-        cutout_clip = _make_cutout_emboss_clip_volume(
-            poly, config, wall_top_z, max_depth, depth, offset_x, offset_y
-        )
-        if cutout_clip is None:
-            continue
-        pocket_depth = _resolve_pocket_depth(poly.depth_override, config, max_depth)
-        yield wall_top_z - pocket_depth, cutout_clip
-
-    if _partial_bins_connect_bases(config):
-        plate_top = _connect_base_emboss_z()
-        connect_clip = _make_connect_base_emboss_clip_volume(
-            config, depth, offset_x, offset_y, wall_top_z, max_depth, polygons
-        )
-        if connect_clip is not None:
-            yield plate_top, connect_clip
-
-
-def _make_split_label_solids(
-    tl,
-    cs,
-    config: GenerateRequest,
-    wall_top_z: float,
-    max_depth: float,
-    polygons: list[ScaledPolygon] | None,
-    offset_x: float,
-    offset_y: float,
-    make_solid,
-):
-    """Text split across floor face, tool cutout floors, and connect-base bridges."""
-    import manifold3d as mf
-
-    lx = tl.x + offset_x
-    ly = -(tl.y + offset_y)
-    parts = []
-
-    for floor_z, clip in _text_label_floor_layers(
-        config, wall_top_z, tl.depth, offset_x, offset_y, polygons, max_depth
-    ):
-        solid = make_solid(cs, tl.depth, tl.rotation, lx, ly, floor_z)
-        part = _intersect_emboss(solid, clip)
-        if part is not None:
-            parts.append(part)
-
-    if not parts:
-        return None
-    if len(parts) == 1:
-        return parts[0]
-    return mf.Manifold.batch_boolean(parts, mf.OpType.Add)
-
-
-def _make_embossed_label_solids(
-    tl,
-    cs,
-    config: GenerateRequest,
-    wall_top_z: float,
-    max_depth: float,
-    polygons: list[ScaledPolygon] | None,
-    offset_x: float,
-    offset_y: float,
-):
-    return _make_split_label_solids(
-        tl,
-        cs,
-        config,
-        wall_top_z,
-        max_depth,
-        polygons,
-        offset_x,
-        offset_y,
-        _embossed_text_solid,
-    )
-
-
-def _make_recessed_label_solids(
-    tl,
-    cs,
-    config: GenerateRequest,
-    wall_top_z: float,
-    max_depth: float,
-    polygons: list[ScaledPolygon] | None,
-    offset_x: float,
-    offset_y: float,
-):
-    return _make_split_label_solids(
-        tl,
-        cs,
-        config,
-        wall_top_z,
-        max_depth,
-        polygons,
-        offset_x,
-        offset_y,
-        _recessed_text_solid,
-    )
+def _point_in_polygon(px: float, py: float, pts: list) -> bool:
+    """ray-casting point-in-polygon test"""
+    n = len(pts)
+    inside = False
+    j = n - 1
+    for i in range(n):
+        xi, yi = pts[i]["x"], pts[i]["y"]
+        xj, yj = pts[j]["x"], pts[j]["y"]
+        if ((yi > py) != (yj > py)) and (px < (xj - xi) * (py - yi) / (yj - yi) + xi):
+            inside = not inside
+        j = i
+    return inside
 
 
 def _make_text_labels(
@@ -1583,33 +1203,48 @@ def _make_text_labels(
 ):
     """Build manifold solids for text labels. Returns (recessed_cutter, embossed_body).
 
-    Labels are clipped to the bin floor, tool cutout floors, and connect-base
-    bridges separately so text spanning a pocket edge or cell boundary sits on
-    each surface without floating.
+    Labels inside tool cutouts sit at the cutout floor. Labels on the bin
+    surface sit at wall_top_z.
     """
     import manifold3d as mf
 
     recessed = []
     embossed = []
+    cutout_floor_z = wall_top_z - pocket_depth
+    polys = polygons or []
 
     for tl in (config.text_labels or []):
+        if not _label_in_enabled_cell(config, tl.x, tl.y):
+            continue
+
         cs = _text_to_cross_section(tl.text, tl.font_size)
         if cs is None:
             continue
 
         try:
+            lx = tl.x + offset_x
+            ly = -(tl.y + offset_y)
+
+            in_cutout = any(
+                _point_in_polygon(tl.x, tl.y, p.get("points", []))
+                for p in polys
+            )
+            base_z = cutout_floor_z if in_cutout else wall_top_z
+
             if tl.emboss:
-                solid = _make_embossed_label_solids(
-                    tl, cs, config, wall_top_z, max_depth, polygons, offset_x, offset_y
+                solid = (
+                    mf.Manifold.extrude(cs, tl.depth)
+                    .rotate((0.0, 0.0, -tl.rotation))
+                    .translate((lx, ly, base_z))
                 )
-                if solid is not None:
-                    embossed.append(solid)
+                embossed.append(solid)
             else:
-                cutter = _make_recessed_label_solids(
-                    tl, cs, config, wall_top_z, max_depth, polygons, offset_x, offset_y
+                cutter = (
+                    mf.Manifold.extrude(cs, tl.depth + 0.01)
+                    .rotate((0.0, 0.0, -tl.rotation))
+                    .translate((lx, ly, base_z - tl.depth - 0.01))
                 )
-                if cutter is not None:
-                    recessed.append(cutter)
+                recessed.append(cutter)
         except Exception as e:
             logger.warning("text label '%s' failed: %s", tl.text, e)
 
@@ -1779,6 +1414,11 @@ class ManifoldSTLGenerator:
         text_body = None
         if config.text_labels:
             t1 = time.monotonic()
+            poly_dicts = (
+                [{"points": [{"x": p[0], "y": p[1]} for p in pg.points_mm]} for pg in polygons]
+                if polygons
+                else []
+            )
             recessed, embossed = _make_text_labels(
                 config,
                 wall_top_z,
@@ -1786,7 +1426,7 @@ class ManifoldSTLGenerator:
                 offset_x,
                 offset_y,
                 pocket_depth,
-                polygons=polygons,
+                polygons=poly_dicts,
                 max_depth=max_depth,
             )
             if recessed:
