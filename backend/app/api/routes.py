@@ -85,6 +85,7 @@ from app.services.project_service import (
 from app.services.project_store import ProjectStore
 from app.services.session_store import SessionStore
 from app.services.stl_generator_manifold import ManifoldSTLGenerator
+from app.services.tool_namer import name_polygons
 from app.services.tool_store import ToolStore
 from app.services.tracer_registry import TRACER_LABELS, tracer_kind, validate_tracer_ids
 
@@ -167,6 +168,7 @@ def _get_tracer(tracer_id: str | None = None) -> AITracer:
         else:
             _tracers[tid] = AITracer(saliency_tracer=tid)
     return _tracers[tid]
+
 
 polygon_scaler = PolygonScaler()
 stl_generator = ManifoldSTLGenerator()
@@ -593,7 +595,12 @@ async def get_available_keys(request: Request):
 
 
 @router.post("/sessions/{session_id}/trace", response_model=TraceResponse)
-async def trace_tools(request: Request, session_id: str, req: TraceRequest, user_id: str = Depends(get_user_id)):
+async def trace_tools(
+    request: Request,
+    session_id: str,
+    req: TraceRequest,
+    user_id: str = Depends(get_user_id),
+):
     user_sessions, _, _ = get_stores(user_id)
     session = user_sessions.get(session_id)
     if not session or not session.corrected_image_path:
@@ -616,9 +623,10 @@ async def trace_tools(request: Request, session_id: str, req: TraceRequest, user
     mask_output_path = str(up / "processed" / f"{session_id}_mask.png")
 
     tracer = _get_tracer(tracer_id)
+    corrected_image_path = _abs(session.corrected_image_path)
     try:
         polygons, mask_path = await tracer.trace_tools(
-            _abs(session.corrected_image_path),
+            corrected_image_path,
             api_key,
             mask_output_path,
         )
@@ -642,6 +650,7 @@ async def trace_tools(request: Request, session_id: str, req: TraceRequest, user
         detail = f"AI tracing failed ({type(e).__name__}: {error_msg[:200]})"
         raise HTTPException(status_code=500, detail=detail)
 
+    polygons = await name_polygons(corrected_image_path, polygons)
     session.polygons = polygons
     session.mask_image_path = _rel(mask_path, up) if mask_path else None
     user_sessions.set(session_id, session)
@@ -654,7 +663,12 @@ async def trace_tools(request: Request, session_id: str, req: TraceRequest, user
 
 
 @router.post("/sessions/{session_id}/trace-mask", response_model=TraceResponse)
-async def trace_from_mask(request: Request, session_id: str, mask: UploadFile, user_id: str = Depends(get_user_id)):
+async def trace_from_mask(
+    request: Request,
+    session_id: str,
+    mask: UploadFile,
+    user_id: str = Depends(get_user_id),
+):
     """trace contours from a user-uploaded mask image"""
     user_sessions, _, _ = get_stores(user_id)
     session = user_sessions.get(session_id)
@@ -674,7 +688,8 @@ async def trace_from_mask(request: Request, session_id: str, mask: UploadFile, u
     mask_path = up / "processed" / f"{session_id}_mask.png"
     mask_path.write_bytes(content)
 
-    contours = _get_tracer()._trace_mask(str(mask_path), _abs(session.corrected_image_path))
+    corrected_image_path = _abs(session.corrected_image_path)
+    contours = _get_tracer()._trace_mask(str(mask_path), corrected_image_path)
 
     if not contours:
         raise HTTPException(status_code=400, detail="no tool outlines found in mask")
@@ -688,6 +703,7 @@ async def trace_from_mask(request: Request, session_id: str, mask: UploadFile, u
             label=f"tool {i + 1}",
         ))
 
+    polygons = await name_polygons(corrected_image_path, polygons)
     session.polygons = polygons
     session.mask_image_path = _rel(mask_path, up)
     user_sessions.set(session_id, session)
