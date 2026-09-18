@@ -1,14 +1,15 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { generateBinStl, getImageUrl, getProject, listBins, updateProjectSketch } from '@/lib/api'
+import { getProject, listBins, updateProjectSketch } from '@/lib/api'
 import type { BinProject, BinSummary, ProjectBinPlacement, ProjectSketch } from '@/types'
 import { Alert } from '@/components/Alert'
 import { Breadcrumb } from '@/components/Breadcrumb'
 import { NumericInput } from '@/components/NumericInput'
 import { BIN_DRAG_MIME, DrawerSketchCanvas } from '@/components/DrawerSketchCanvas'
 import { DrawerSketch3D } from '@/components/DrawerSketch3D'
+import { useBinStlUrls } from '@/hooks/useBinStlUrls'
 import { useDebouncedSave } from '@/hooks/useDebouncedSave'
 import { GRID_UNIT } from '@/lib/constants'
 import {
@@ -30,7 +31,7 @@ import {
 } from '@/lib/drawerLayout'
 import { binLabel } from '@/lib/projectSelectors'
 import { cn } from '@/lib/utils'
-import { AlertTriangle, Box, Check, Copy, Grid2x2, LayoutGrid, Loader2, Palette, Plus, RotateCw, Sparkles, Trash2, X } from 'lucide-react'
+import { AlertTriangle, Box, Check, Copy, Grid2x2, LayoutGrid, Loader2, Palette, Plus, RotateCw, Sparkles, Trash2, TriangleAlert, X } from 'lucide-react'
 
 type ViewMode = '2d' | '3d'
 
@@ -84,9 +85,10 @@ export default function ProjectSketchPage() {
   const [drawerY, setDrawerY] = useState<number | null>(null)
   const [selectedPlacementId, setSelectedPlacementId] = useState<string | null>(null)
   const [colorPickerBinId, setColorPickerBinId] = useState<string | null>(null)
+  // what the last auto-arrange could not fit; "kept" ids stay in the plan, "skipped"
+  // bins were never added because the plan was empty
+  const [arrangeMisfits, setArrangeMisfits] = useState<{ kind: 'kept' | 'skipped'; ids: string[] } | null>(null)
   const [view, setView] = useState<ViewMode>('2d')
-  const [stlUrls, setStlUrls] = useState<Map<string, string>>(new Map())
-  const [pendingStlCount, setPendingStlCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -133,19 +135,28 @@ export default function ProjectSketchPage() {
   const stats = useMemo(() => drawerStats(placements, bins, gridX, gridY), [placements, bins, gridX, gridY])
   const selectedPlacement = placements.find(placement => placement.id === selectedPlacementId) || null
 
-  const { saving, saved } = useDebouncedSave(
+  // a "kept" notice only stays while some of those placements still exist and still conflict
+  const arrangeNotice = useMemo(() => {
+    if (!arrangeMisfits) return null
+    if (arrangeMisfits.kind === 'skipped') {
+      const count = arrangeMisfits.ids.length
+      return `${count} bin${count !== 1 ? 's' : ''} did not fit into the drawer and ${count !== 1 ? 'were' : 'was'} not placed.`
+    }
+    const present = new Set(placements.map(placement => placement.id))
+    const count = arrangeMisfits.ids.filter(id => present.has(id) && (overlapping.has(id) || outOfBounds.has(id))).length
+    if (count === 0) return null
+    return `${count} placement${count !== 1 ? 's' : ''} did not fit and kept ${count !== 1 ? 'their' : 'its'} position, marked with a dashed outline.`
+  }, [arrangeMisfits, placements, overlapping, outOfBounds])
+
+  // a rejection must reach the hook: catching it here would report the plan as saved
+  const { saving, saved, error: saveError } = useDebouncedSave(
     async () => {
       if (!project || !sketch) return
-      try {
-        await updateProjectSketch(project.id, sketch.id, {
-          target_grid_x: drawerX,
-          target_grid_y: drawerY,
-          bin_layout: placements,
-        })
-        setError(null)
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'failed to save drawer plan')
-      }
+      await updateProjectSketch(project.id, sketch.id, {
+        target_grid_x: drawerX,
+        target_grid_y: drawerY,
+        bin_layout: placements,
+      })
     },
     [project, sketch, drawerX, drawerY, placements],
     400,
@@ -165,39 +176,10 @@ export default function ProjectSketchPage() {
 
   // real bin models for the 3D view; generation is hash-cached server side, so
   // this is a no-op once a bin has been generated with its current config
-  const placedBinIds = useMemo(
-    () => Array.from(new Set(placements.map(placement => placement.bin_id))).sort(),
-    [placements],
+  const { stlUrls, pendingCount: pendingStlCount } = useBinStlUrls(
+    placements.map(placement => placement.bin_id),
+    view === '3d',
   )
-  const requestedStlBinIds = useRef<Set<string>>(new Set())
-
-  useEffect(() => {
-    if (view !== '3d') return
-    const missing = placedBinIds.filter(binId => !requestedStlBinIds.current.has(binId))
-    if (missing.length === 0) return
-
-    let cancelled = false
-    missing.forEach(binId => requestedStlBinIds.current.add(binId))
-    setPendingStlCount(count => count + missing.length)
-
-    async function generateAll() {
-      for (const binId of missing) {
-        try {
-          const result = await generateBinStl(binId)
-          if (cancelled) return
-          setStlUrls(prev => new Map(prev).set(binId, `${getImageUrl(result.stl_url)}?v=${Date.now()}`))
-        } catch {
-          // keep the placeholder block for this bin
-          requestedStlBinIds.current.delete(binId)
-        } finally {
-          if (!cancelled) setPendingStlCount(count => Math.max(0, count - 1))
-        }
-      }
-    }
-    generateAll()
-
-    return () => { cancelled = true }
-  }, [view, placedBinIds])
 
   const occupiedRects = useCallback((current: ProjectBinPlacement[], exceptPlacementId?: string) => (
     current
@@ -298,14 +280,20 @@ export default function ProjectSketchPage() {
   }, [binMap, gridX, gridY])
 
   const handleAutoArrange = useCallback(() => {
-    setPlacements(prev => {
-      const seeded = prev.length > 0
-        ? prev
-        : bins.map(bin => ({ id: newPlacementId(), bin_id: bin.id, x: 0, y: 0, rotation: 0, color: null }))
-      return autoArrange(seeded, binMap, gridX, gridY).placements
-    })
+    const seeding = placements.length === 0
+    const input = seeding
+      ? bins.map(bin => ({ id: newPlacementId(), bin_id: bin.id, x: 0, y: 0, rotation: 0, color: null }))
+      : placements
+    const result = autoArrange(input, binMap, gridX, gridY)
+    const unfitted = new Set(result.unfittedIds)
+    const count = unfitted.size
+
+    // seeds were never part of the plan, so the ones that do not fit are simply not
+    // added; an existing plan keeps every placement and only shows what did not fit
+    setPlacements(seeding ? result.placements.filter(placement => !unfitted.has(placement.id)) : result.placements)
+    setArrangeMisfits(count === 0 ? null : { kind: seeding ? 'skipped' : 'kept', ids: result.unfittedIds })
     setSelectedPlacementId(null)
-  }, [bins, binMap, gridX, gridY])
+  }, [placements, bins, binMap, gridX, gridY])
 
   const handleEnableDrawer = useCallback(() => {
     setDrawerX(DEFAULT_DRAWER_GRID_X)
@@ -317,6 +305,7 @@ export default function ProjectSketchPage() {
     setDrawerY(null)
     setPlacements([])
     setSelectedPlacementId(null)
+    setArrangeMisfits(null)
   }, [])
 
   useEffect(() => {
@@ -380,8 +369,19 @@ export default function ProjectSketchPage() {
                 { label: sketch.name, editable: true, onEdit: handleRename },
               ]} />
               {saving && <Loader2 className="w-3 h-3 animate-spin text-text-muted flex-shrink-0" />}
-              {saved && <Check className="w-3 h-3 text-green-400 flex-shrink-0" />}
+              {saved && !saveError && <Check className="w-3 h-3 text-green-400 flex-shrink-0" />}
+              {saveError && !saving && (
+                <TriangleAlert
+                  className="w-3 h-3 text-red-400 flex-shrink-0"
+                  aria-label="Changes not saved"
+                />
+              )}
             </div>
+            {saveError && (
+              <div role="alert" className="mb-3 rounded-[8px] border border-red-800 bg-red-900/20 px-2 py-1.5 text-[11px] text-red-300">
+                Changes are not being saved. Recent edits to this plan will be lost if you leave the page.
+              </div>
+            )}
 
             <h3 className="text-[10px] font-semibold text-text-muted uppercase tracking-[1.5px] mb-2">Drawer size</h3>
             {hasDrawer ? (
@@ -455,6 +455,19 @@ export default function ProjectSketchPage() {
                   ].filter(Boolean).join(' · ')}
                 </p>
               )}
+              {arrangeNotice && (
+                <div role="status" className="mt-2 flex items-start gap-1 text-[10px] text-amber-500">
+                  <span className="flex-1">{arrangeNotice}</span>
+                  <button
+                    type="button"
+                    onClick={() => setArrangeMisfits(null)}
+                    className="flex-shrink-0 hover:text-text-primary cursor-pointer"
+                    title="Dismiss"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
               <div className="mt-2 flex gap-1.5">
                 <button
                   type="button"
@@ -468,7 +481,7 @@ export default function ProjectSketchPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setPlacements([]); setSelectedPlacementId(null) }}
+                  onClick={() => { setPlacements([]); setSelectedPlacementId(null); setArrangeMisfits(null) }}
                   disabled={placements.length === 0}
                   className="btn-secondary px-2 py-1 text-[11px]"
                   title="Remove all bins from the drawer"

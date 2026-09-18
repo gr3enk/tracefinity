@@ -214,10 +214,47 @@ describe('autoArrange', () => {
 
     const result = autoArrange(placements, bins, 3, 2)
 
-    expect(result.placements.map(p => p.id)).toEqual(['p-large', 'p-small'])
+    expect(result.placements.map(p => p.id)).toEqual(['p-large', 'p-small', 'p-huge'])
     expect(result.placements[0]).toMatchObject({ bin_id: 'large', x: 0, y: 0, rotation: 0 })
     expect(result.placements[1]).toMatchObject({ bin_id: 'small', x: 2, y: 0, rotation: 0 })
-    expect(result.droppedIds).toEqual(['p-huge'])
+    expect(result.unfittedIds).toEqual(['p-huge'])
+  })
+
+  it('never removes a placement that does not fit', () => {
+    const bins = binById([bin('a', 3, 2), bin('b', 3, 2)])
+    const placements = [
+      placement('a', 0, 0, 0, 'p-a'),
+      { ...placement('b', 1, 0, 180, 'p-b'), color: '#ff6384' },
+    ]
+
+    const result = autoArrange(placements, bins, 3, 2)
+
+    expect(result.placements).toHaveLength(2)
+    expect(result.unfittedIds).toEqual(['p-b'])
+    // the unfitted copy stays exactly where it was, colour and all
+    expect(result.placements.find(p => p.id === 'p-b')).toEqual(placements[1])
+  })
+
+  it('flags what did not fit through the regular conflict checks', () => {
+    const bins = binById([bin('a', 3, 2), bin('b', 3, 2)])
+    const placements = [placement('a', 0, 0, 0, 'p-a'), placement('b', 0, 0, 0, 'p-b')]
+
+    const result = autoArrange(placements, bins, 3, 2)
+    const { overlapping, outOfBounds } = findLayoutConflicts(result.placements, bins, 3, 2)
+
+    for (const id of result.unfittedIds) {
+      expect(overlapping.has(id) || outOfBounds.has(id)).toBe(true)
+    }
+  })
+
+  it('leaves placements of bins that are not loaded untouched', () => {
+    const bins = binById([bin('a', 1, 1)])
+    const orphan = placement('gone', 4, 3, 90, 'p-gone')
+
+    const result = autoArrange([placement('a', 2, 2, 0, 'p-a'), orphan], bins, 6, 4)
+
+    expect(result.placements).toContainEqual(orphan)
+    expect(result.unfittedIds).toEqual([])
   })
 
   it('keeps copies of the same bin apart', () => {

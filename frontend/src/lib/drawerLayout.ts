@@ -220,14 +220,19 @@ export function findFreeSpot(
 
 /**
  * Pack the given placements into the drawer, largest bin first. Placements keep
- * their ids so repeated copies of a bin survive; ones that do not fit are dropped.
+ * their ids so repeated copies of a bin survive.
+ *
+ * Nothing is ever removed: a placement that finds no free spot keeps its
+ * previous position and is reported in `unfittedIds`. It then necessarily
+ * overlaps an arranged bin or sticks out of the drawer, so the conflict
+ * highlighting shows the user exactly what did not fit.
  */
 export function autoArrange(
   placements: ProjectBinPlacement[],
   bins: Map<string, BinSummary>,
   drawerX: number,
   drawerY: number,
-): { placements: ProjectBinPlacement[]; droppedIds: string[] } {
+): { placements: ProjectBinPlacement[]; unfittedIds: string[] } {
   const ordered = placements
     .filter(placement => bins.has(placement.bin_id))
     .sort((a, b) => {
@@ -239,14 +244,14 @@ export function autoArrange(
     })
 
   const arranged: ProjectBinPlacement[] = []
-  const droppedIds: string[] = []
+  const unfitted: ProjectBinPlacement[] = []
   const occupied: UnitRect[] = []
 
   for (const placement of ordered) {
     const bin = bins.get(placement.bin_id)!
     const spot = findFreeSpot(bin, occupied, drawerX, drawerY)
     if (!spot) {
-      droppedIds.push(placement.id)
+      unfitted.push(placement)
       continue
     }
     const placed = { ...placement, x: spot.x, y: spot.y, rotation: spot.rotation }
@@ -254,7 +259,13 @@ export function autoArrange(
     occupied.push(placementRect(placed, bin))
   }
 
-  return { placements: arranged, droppedIds }
+  // placements of bins that are not loaded cannot be measured; leave them untouched
+  const unknown = placements.filter(placement => !bins.has(placement.bin_id))
+
+  return {
+    placements: [...arranged, ...unfitted, ...unknown],
+    unfittedIds: unfitted.map(placement => placement.id),
+  }
 }
 
 export interface DrawerStats {
