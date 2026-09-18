@@ -1,17 +1,63 @@
 from __future__ import annotations
 
+import math
 import re
 import uuid
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.constants import PaperSize
+from app.constants import (
+    MAX_BIN_GRID_CELLS,
+    MAX_BIN_GRID_UNITS,
+    MIN_BIN_GRID_UNITS,
+    PaperSize,
+)
 
 
 class Point(BaseModel):
     x: float
     y: float
+
+    @field_validator("x", "y")
+    @classmethod
+    def validate_finite(cls, v: float) -> float:
+        if not math.isfinite(v):
+            raise ValueError("point coordinate must be finite")
+        return v
+
+
+class CaptureCrop(BaseModel):
+    x: float
+    y: float
+    width: float
+    height: float
+
+    @field_validator("x", "y", "width", "height")
+    @classmethod
+    def validate_finite(cls, v: float) -> float:
+        if not math.isfinite(v):
+            raise ValueError("capture crop value must be finite")
+        return v
+
+    @field_validator("x", "y")
+    @classmethod
+    def validate_origin(cls, v: float) -> float:
+        if v < 0 or v > 1:
+            raise ValueError("capture crop origin must be between 0 and 1")
+        return v
+
+    @field_validator("width", "height")
+    @classmethod
+    def validate_size(cls, v: float) -> float:
+        if v <= 0 or v > 1:
+            raise ValueError("capture crop size must be between 0 and 1")
+        return v
+
+
+class PhotoWarning(BaseModel):
+    code: str
+    message: str
 
 
 class FingerHole(BaseModel):
@@ -49,16 +95,27 @@ class UploadResponse(BaseModel):
     session_id: str
     image_url: str
     detected_corners: list[Point] | None
+    image_width: int | None = None
+    image_height: int | None = None
+    corner_source: Literal["detected", "station", "none"] = "none"
+    station_id: str | None = None
 
 
 class CornersRequest(BaseModel):
     corners: list[Point]
     paper_size: PaperSize
+    save_station_name: str | None = None
 
 
 class CornersResponse(BaseModel):
     corrected_image_url: str
     scale_factor: float
+    warnings: list[PhotoWarning] = []
+    station: "PhotoStation | None" = None
+
+
+class RedetectCornersResponse(BaseModel):
+    corners: list[Point]
 
 
 class TraceRequest(BaseModel):
@@ -101,9 +158,11 @@ class BinParams(BaseModel):
 
     @model_validator(mode="after")
     def normalize_partial_bins_values(self) -> "BinParams":
-        import math
-
         expected = math.ceil(self.grid_x) * math.ceil(self.grid_y)
+        if expected > MAX_BIN_GRID_CELLS:
+            raise ValueError(
+                f"grid footprint must not exceed {MAX_BIN_GRID_CELLS} cells"
+            )
         if len(self.partial_bins_values) != expected:
             self.partial_bins_values = [True] * expected
         if not self.partial_bins_connect:
@@ -115,9 +174,10 @@ class BinParams(BaseModel):
     @field_validator("grid_x", "grid_y")
     @classmethod
     def validate_grid(cls, v: float) -> float:
-        if v < 1 or v > 10:
-            raise ValueError("grid size must be between 1 and 10")
-        # must be a multiple of 0.5
+        if v < MIN_BIN_GRID_UNITS:
+            raise ValueError(f"grid size must be at least {MIN_BIN_GRID_UNITS:g} unit")
+        if v > MAX_BIN_GRID_UNITS:
+            raise ValueError(f"grid size must not exceed {MAX_BIN_GRID_UNITS:g} units per axis")
         if v * 2 != int(v * 2):
             raise ValueError("grid size must be a multiple of 0.5")
         return v
@@ -139,8 +199,8 @@ class BinParams(BaseModel):
     @field_validator("cutout_depth")
     @classmethod
     def validate_depth(cls, v: float) -> float:
-        if v < 1 or v > 200:
-            raise ValueError("cutout depth must be between 1 and 200mm")
+        if v < 0.25 or v > 200:
+            raise ValueError("cutout depth must be between 0.25 and 200mm")
         return v
 
     @field_validator("cutout_clearance")
@@ -217,11 +277,16 @@ class Session(BaseModel):
     tags: list[str] = []
     created_at: str | None = None
     original_image_path: str | None = None
+    original_image_width: int | None = None
+    original_image_height: int | None = None
+    capture_crop: CaptureCrop | None = None
     corrected_image_path: str | None = None
     mask_image_path: str | None = None
     corners: list[Point] | None = None
     paper_size: PaperSize | None = None
     scale_factor: float | None = None
+    focal_length_35mm: float | None = None
+    photo_warnings: list[PhotoWarning] | None = None
     polygons: list[Polygon] | None = None
     stl_path: str | None = None
     layout: Layout | None = None
@@ -251,6 +316,81 @@ class SessionUpdateRequest(BaseModel):
 
 class StatusResponse(BaseModel):
     status: str
+
+
+# --- photo stations ---
+
+PhotoStationMatchStatus = Literal["exact", "near", "far"]
+
+
+class PhotoStation(BaseModel):
+    id: str
+    name: str
+    image_width: int
+    image_height: int
+    image_path: str | None = None
+    capture_crop: CaptureCrop | None = None
+    paper_size: PaperSize
+    corners: list[Point]
+    created_at: str | None = None
+    updated_at: str | None = None
+    last_used_at: str | None = None
+
+    @field_validator("image_width", "image_height")
+    @classmethod
+    def validate_image_dimension(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("station image dimensions must be positive")
+        return v
+
+    @field_validator("corners")
+    @classmethod
+    def validate_corners(cls, v: list[Point]) -> list[Point]:
+        if len(v) != 4:
+            raise ValueError("station corners must contain four points")
+        return v
+
+
+class PhotoStationSuggestion(BaseModel):
+    station: PhotoStation
+    match_status: PhotoStationMatchStatus
+    width_delta_percent: float = 0.0
+    height_delta_percent: float = 0.0
+    max_corner_drift_px: float | None = None
+    max_corner_drift_percent: float | None = None
+    warnings: list[str] = []
+
+
+class PhotoStationListResponse(BaseModel):
+    stations: list[PhotoStation]
+
+
+class PhotoStationSuggestionsResponse(BaseModel):
+    suggestions: list[PhotoStationSuggestion]
+    station_count: int
+
+
+class PhotoStationCreateRequest(BaseModel):
+    name: str
+    session_id: str
+    paper_size: PaperSize | None = None
+    corners: list[Point] | None = None
+
+
+class PhotoStationUpdateRequest(BaseModel):
+    name: str | None = None
+    paper_size: PaperSize | None = None
+    corners: list[Point] | None = None
+
+
+class ReuseCornersRequest(BaseModel):
+    station_id: str
+
+
+class ReuseCornersResponse(BaseModel):
+    corners: list[Point]
+    paper_size: PaperSize
+    suggestion: PhotoStationSuggestion
 
 
 # --- tool library ---

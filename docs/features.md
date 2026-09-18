@@ -7,6 +7,7 @@ Reference for AI agents. Check here before suggesting new features or claiming s
 - Image upload (drag-drop or file picker, JPG/PNG/WebP/HEIC)
 - Paper corner detection with draggable handles
 - Paper size presets (A4, Letter, A3, Tabloid)
+- Photo quality warnings before tracing (camera too close via EXIF focal length, paper cut off at the frame edge, extreme perspective)
 - AI tracing (multiple tracer backends: IS-Net, BiRefNet, InSPyReNet)
 - Remote tracing via Replicate (`REPLICATE_API_TOKEN`, model `men1scus/birefnet` by default; `REPLICATE_RESOLUTION` optional)
 - Remote tracing via fal.ai (`FAL_KEY`, model `fal-ai/birefnet/v2` by default; `FAL_OPERATING_RESOLUTION` default `1024x1024`). Uses `sync_mode` so results are not stored in fal request history; Replicate predictions auto-purge after ~1h.
@@ -47,9 +48,9 @@ Reference for AI agents. Check here before suggesting new features or claiming s
 
 ## Bin Configuration
 
-- Grid sizing (width/depth in gridfinity units, 1-10, 0.5-unit increments for 21mm half-grid)
-- Bin height in units (7mm each + 4.75mm base)
-- Cutout depth (5mm to max)
+- Grid sizing (width/depth in gridfinity units, 1-25 per axis and 100 cells total, with 0.5-unit increments for 21mm half-grid)
+- Bin height in units (7mm each, including the base; lip and raised rim add height)
+- Cutout depth (5mm to the height-dependent maximum; 0.25mm at 1u)
 - Clearance (0-5mm extra space around tools)
 - Cutout chamfer toggle
 - Magnet holes (enable/disable, diameter and depth)

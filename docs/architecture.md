@@ -95,6 +95,18 @@ tracefinity/
 - **ProjectSketch**: one drawer plan owned by a project: a name, an optional drawer grid (`target_grid_x`/`target_grid_y`, 1-40 units) and a `bin_layout` of `ProjectBinPlacement` records (`id`, `bin_id`, `x`, `y`, `rotation`, `color`) positioning linked bins on that grid. A bin may appear several times, so placements are identified by their own id.
 - **Session**: ephemeral, used only for upload/trace workflow. Output is tools saved to library via `save-tools`.
 
+Each record and generated file belongs to a storage namespace, keyed by the
+account's `storage_namespace`. Identity is resolved per `AUTH_MODE` through a
+middleware chain (CORS, then ProxySecret, then StorageAuth) plus the
+`get_user_id` dependency on API routes: `native` (default) resolves the auth
+cookie to an account whose namespace keys stores and paths, with the first
+administrator claiming `default`; `proxy` trusts `X-User-Id` only with the
+matching `X-Proxy-Secret`; `open` keeps the single-user `default` fallback.
+`native` and `proxy` fail closed with `401`, and untrusted clients can never
+select a namespace by header. Accounts live in `users.json` and hashed auth
+tokens in `auth_tokens.json`, both at the storage root beside the per-user
+directories. See [auth.md](auth.md).
+
 PlacedTools sync with their library source on bin load (`GET /bins/{id}`) via `bin_service.sync_placed_tools()`. Edits to a tool's points, finger holes, or name propagate to all bins that use it. The position offset is preserved.
 
 Projects do not own tools or bins. Tools keep `project_ids`, bins keep `project_id`, and project health/repair endpoints keep those links consistent when records are renamed, deleted, or manually edited. Drawer placements follow the bin links: detaching or deleting a bin drops its placement from every sketch, and repair prunes placements for bins that are no longer linked.
